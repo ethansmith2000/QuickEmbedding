@@ -43,19 +43,32 @@ def load_embeds(pipe, embeddings_dir):
     loaded_tokens = []
     for path in paths:
         embed_dict = torch.load(os.path.join(embeddings_dir,path))
+        if "vitl" in path:
+            num_added_tokens += pipe.tokenizer.add_tokens(embed_dict["placeholder_token"])
+            placeholder_token_id = pipe.tokenizer.convert_tokens_to_ids(embed_dict["placeholder_token"])
 
-        num_added_tokens += pipe.tokenizer.add_tokens(embed_dict["placeholder_token"])
-        placeholder_token_id = pipe.tokenizer.convert_tokens_to_ids(embed_dict["placeholder_token"])
+            # Resize the token embeddings as we are adding new special tokens to the tokenizer
+            pipe.text_encoder.resize_token_embeddings(len(pipe.tokenizer))
 
-        # Resize the token embeddings as we are adding new special tokens to the tokenizer
-        pipe.text_encoder.resize_token_embeddings(len(pipe.tokenizer))
+            # load the embed
+            token_embeds = pipe.text_encoder.get_input_embeddings().weight.data
+            token_embeds[placeholder_token_id] = embed_dict["embedding"]
 
-        # load the embed
-        token_embeds = pipe.text_encoder.get_input_embeddings().weight.data
-        token_embeds[placeholder_token_id] = embed_dict["embedding"]
+            # running total of tokens to know what got loaded
+            loaded_tokens.append(embed_dict["placeholder_token"])
+        else:
+            num_added_tokens += pipe.tokenizer_2.add_tokens(embed_dict["placeholder_token"])
+            placeholder_token_id = pipe.tokenizer_2.convert_tokens_to_ids(embed_dict["placeholder_token"])
 
-        # running total of tokens to know what got loaded
-        loaded_tokens.append(embed_dict["placeholder_token"])
+            # Resize the token embeddings as we are adding new special tokens to the tokenizer
+            pipe.text_encoder_2.resize_token_embeddings(len(pipe.tokenizer_2))
+
+            # load the embed
+            token_embeds = pipe.text_encoder_2.get_input_embeddings().weight.data
+            token_embeds[placeholder_token_id] = embed_dict["embedding"]
+
+            # running total of tokens to know what got loaded
+            loaded_tokens.append(embed_dict["placeholder_token"])
 
     print("trained tokens added:", loaded_tokens)
 
@@ -252,12 +265,14 @@ class TextualInversionDataset(Dataset):
 
         # get embeddings for first wave
         if vision_model1_path is not None:
-            image_model1 = CLIPVisionModelWithProjection.from_pretrained(vision_model1_path).to("cuda").to(torch.float16).eval()
             import open_clip
 
             model, preprocess_train, preprocess_val = open_clip.create_model_and_transforms(
                 'hf-hub:laion/CLIP-ViT-bigG-14-laion2B-39B-b160k')
             vision_model = model.visual.to("cuda").to(torch.float16).eval()
+
+            image_model1 = CLIPVisionModelWithProjection.from_pretrained(vision_model1_path).to("cuda").to(torch.float16).eval()
+
 
             with torch.no_grad():
                 self.clip_embeddings1 = []
@@ -325,7 +340,7 @@ class TextualInversionDataset(Dataset):
         return self._length
 
     def __getitem__(self, i):
-        if self.vision_model_path is not None:
+        if self.vision_model1_path is not None:
             example = {}
 
             if self.captions is None:

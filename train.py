@@ -34,13 +34,13 @@ from utils import save_progress, spherical_dist_loss, TextualInversionDataset
 logger = get_logger(__name__)
 
 def main(args):
-    logging_dir = os.path.join(args.output_dir, args.logging_dir)
+    #logging_dir = os.path.join(args.output_dir, args.logging_dir)
 
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
-        log_with=args.report_to,
-        logging_dir=logging_dir,
+        #log_with=args.report_to,
+        #logging_dir=logging_dir,
     )
 
     if args.report_to == "wandb":
@@ -148,7 +148,7 @@ def main(args):
 
     # Initialize the optimizer
     optimizer = torch.optim.AdamW(
-        [text_encoder.get_input_embeddings().parameters(), text_encoder2.get_input_embeddings().parameters()],
+        [*text_encoder.get_input_embeddings().parameters(), *text_encoder2.get_input_embeddings().parameters()],
         lr=args.clip_train_lr,
         betas=(args.adam_beta1, args.adam_beta2),
         weight_decay=args.adam_weight_decay,
@@ -292,8 +292,6 @@ def main(args):
         repeats=args.repeats,
         learnable_property=args.learnable_property,
         center_crop=args.center_crop,
-        vision_model1_path=None,
-        vision_model2_path=None,
         initializer_token=args.initializer_token,
         pad_tokens=args.pad_tokens,
         vae_path=args.pretrained_model_name_or_path if args.cache_latents else None,
@@ -346,7 +344,7 @@ def main(args):
 
     # remake the optimizer
     optimizer = torch.optim.AdamW(
-        [text_encoder.get_input_embeddings().parameters(), text_encoder2.get_input_embeddings().parameters()],
+        [*text_encoder.get_input_embeddings().parameters(), *text_encoder2.get_input_embeddings().parameters()],
         lr=args.learning_rate,
         betas=(args.adam_beta1, args.adam_beta2),
         weight_decay=args.adam_weight_decay,
@@ -411,14 +409,14 @@ def main(args):
     global_step = 0
     first_epoch = 0
 
-    def _get_add_time_ids(self, original_size, crops_coords_top_left, target_size):
+    def _get_add_time_ids(self, text_enc, original_size, crops_coords_top_left, target_size):
         add_time_ids = list(original_size + crops_coords_top_left + target_size)
 
         passed_add_embed_dim = (
-                self.unet.config.addition_time_embed_dim * len(
-            add_time_ids) + self.text_encoder_2.config.projection_dim
+            unet.config.addition_time_embed_dim * len(
+            add_time_ids) + text_enc.config.projection_dim
         )
-        expected_add_embed_dim = self.unet.add_embedding.linear_1.in_features
+        expected_add_embed_dim = unet.add_embedding.linear_1.in_features
 
         add_time_ids = torch.tensor([add_time_ids])
         return add_time_ids
@@ -458,23 +456,23 @@ def main(args):
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
                 # Get the text embedding for conditioning
-                encoder_hidden_states1 = text_encoder(batch["input_ids"]).hidden_states[-1].to(dtype=weight_dtype)
-                output = text_encoder2(batch["input_ids"])
-                encoder_hidden_states2 = output.hidden_states[-1].to(dtype=weight_dtype)
-                pooled = output.pooler_output.to(dtype=weight_dtype)
+                encoder_hidden_states1 = text_encoder(batch["input_ids"], output_hidden_states=True).hidden_states[-2].to(dtype=weight_dtype)
+                output = text_encoder2(batch["input_ids"], output_hidden_states=True)
+                encoder_hidden_states2 = output.hidden_states[-2].float().to(dtype=weight_dtype)
+                pooled = output[0].float().to(dtype=weight_dtype)
                 encoder_hidden_states = torch.cat([encoder_hidden_states1, encoder_hidden_states2], dim=2)
 
                 original_size = (noisy_latents.shape[-2]*8, noisy_latents.shape[-1]*8)
                 target_size = (noisy_latents.shape[-2]*8, noisy_latents.shape[-1]*8)
                 crops_coords_top_left = (0, 0)
-                add_time_ids = _get_add_time_ids(unet, original_size, crops_coords_top_left, target_size).to("cuda").to(weight_dtype).repeat(noisy_latents.shape[0], 1)
+                add_time_ids = _get_add_time_ids(unet, text_encoder2, original_size, crops_coords_top_left, target_size).to("cuda").to(weight_dtype)
+                add_time_ids = add_time_ids.repeat(noisy_latents.shape[0], 1)
 
                 added_cond_kwargs = {"text_embeds": pooled, "time_ids": add_time_ids}
 
                 # Predict the noise residual
-                with torch.no_grad():
-                    model_pred = unet(noisy_latents, timesteps, encoder_hidden_states=encoder_hidden_states,
-                                      added_cond_kwargs=added_cond_kwargs,).sample
+                model_pred = unet(noisy_latents, timesteps, encoder_hidden_states=encoder_hidden_states,
+                                  added_cond_kwargs=added_cond_kwargs,).sample
 
                 # Get the target for loss depending on the prediction type
                 if noise_scheduler.config.prediction_type == "epsilon":
@@ -575,6 +573,8 @@ def main(args):
     # save
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
+        if not os.path.exists(args.output_dir):
+            os.makedirs(args.output_dir)
         save_path = os.path.join(args.output_dir, "learned_embeds_vitl.bin")
         save_progress(text_encoder, placeholder_token_id, accelerator, args, save_path, subtokens, logger)
         save_path = os.path.join(args.output_dir, "learned_embeds_vitg.bin")
