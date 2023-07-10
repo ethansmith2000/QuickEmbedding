@@ -65,75 +65,75 @@ def main(args):
         set_seed(args.seed)
 
     # Load tokenizer
-    if args.tokenizer_name:
-        tokenizer = CLIPTokenizer.from_pretrained(args.tokenizer_name)
-    elif args.pretrained_model_name_or_path:
-        tokenizer = CLIPTokenizer.from_pretrained(args.clip_model_path)
+    tokenizer = CLIPTokenizer.from_pretrained(args.pretrained_model_name_or_path, subfolder="tokenizer")
+    tokenizer2 = CLIPTokenizer.from_pretrained(args.pretrained_model_name_or_path, subfolder="tokenizer_2")
 
     # Load scheduler and models
     text_encoder = CLIPTextModelWithProjection.from_pretrained(args.clip_model_path).to(accelerator.device)
+    text_encoder2 = CLIPTextModelWithProjection.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder_2").to(accelerator.device)
 
-    with torch.no_grad():
-        # Add the placeholder token in tokenizer
-        if args.num_vectors == 1:
-            num_added_tokens = tokenizer.add_tokens(args.placeholder_token)
-            subtokens = None
-        else:
-            num_added_tokens = 0
-            subtokens = [f'xyzzyx{i}' for i in range(args.num_vectors)]
-            for tok in subtokens:
-                num_added_tokens = tokenizer.add_tokens(tok)
-
-        if num_added_tokens == 0:
-            raise ValueError(
-                f"The tokenizer already contains the token {args.placeholder_token}. Please pass a different"
-                " `placeholder_token` that is not already in the tokenizer."
-            )
-
-        if args.initializer_token is not None:
-            # Convert the initializer_token, placeholder_token to ids
-            initializer_token_id = tokenizer(args.initializer_token, add_special_tokens=False).input_ids
-            # Check if initializer_token is a single token or a sequence of tokens
-            if len(initializer_token_id) > 1:
-                raise ValueError("The initializer token must be a single token.")
-
-            initializer_token_id = initializer_token_id
-
-        if args.num_vectors > 1:
-            initializer_token_id = [initializer_token_id] * args.num_vectors
-
-            placeholder_token_id = tokenizer.convert_tokens_to_ids(subtokens)
-        else:
-            placeholder_token_id = tokenizer.convert_tokens_to_ids(args.placeholder_token)
-
-        # Resize the token embeddings as we are adding new special tokens to the tokenizer
-        text_encoder.resize_token_embeddings(len(tokenizer))
-
-        # Initialise the newly added placeholder token with the embeddings of the initializer token
-        token_embeds = text_encoder.get_input_embeddings().weight.data
-        if args.initializer_token is not None:
-            if args.num_vectors > 1:
-                for i in range(args.num_vectors):
-                    token_embeds[placeholder_token_id[i]] = token_embeds[initializer_token_id[i]]
+    for tokenizr, text_enc in zip([tokenizer, tokenizer2], [text_encoder, text_encoder2]):
+        with torch.no_grad():
+            # Add the placeholder token in tokenizer
+            if args.num_vectors == 1:
+                num_added_tokens = tokenizr.add_tokens(args.placeholder_token)
+                subtokens = None
             else:
-                token_embeds[placeholder_token_id] = token_embeds[initializer_token_id]
-        else:
+                num_added_tokens = 0
+                subtokens = [f'xyzzyx{i}' for i in range(args.num_vectors)]
+                for tok in subtokens:
+                    num_added_tokens = tokenizr.add_tokens(tok)
+
+            if num_added_tokens == 0:
+                raise ValueError(
+                    f"The tokenizer already contains the token {args.placeholder_token}. Please pass a different"
+                    " `placeholder_token` that is not already in the tokenizer."
+                )
+
+            if args.initializer_token is not None:
+                # Convert the initializer_token, placeholder_token to ids
+                initializer_token_id = tokenizr(args.initializer_token, add_special_tokens=False).input_ids
+                # Check if initializer_token is a single token or a sequence of tokens
+                if len(initializer_token_id) > 1:
+                    raise ValueError("The initializer token must be a single token.")
+
+                initializer_token_id = initializer_token_id
+
             if args.num_vectors > 1:
-                for i in range(args.num_vectors):
-                    token_embeds[placeholder_token_id[i]] = torch.randn_like(token_embeds[0]) * 0.01
+                initializer_token_id = [initializer_token_id] * args.num_vectors
+
+                placeholder_token_id = tokenizr.convert_tokens_to_ids(subtokens)
             else:
-                token_embeds[placeholder_token_id] = torch.randn_like(token_embeds[0]) * 0.01
+                placeholder_token_id = tokenizr.convert_tokens_to_ids(args.placeholder_token)
 
-        # Freeze all parameters except for the token embeddings in text encoder
-        text_encoder.text_model.encoder.requires_grad_(False)
-        text_encoder.text_model.final_layer_norm.requires_grad_(False)
-        text_encoder.text_model.embeddings.position_embedding.requires_grad_(False)
-        text_encoder.get_input_embeddings().weight.requires_grad_(True)
+            # Resize the token embeddings as we are adding new special tokens to the tokenizer
+            text_enc.resize_token_embeddings(len(tokenizr))
 
-        if args.gradient_checkpointing:
-            # Keep unet in train mode if we are using gradient checkpointing to save memory.
-            # The dropout cannot be != 0 so it doesn't matter if we are in eval or train mode.
-            text_encoder.gradient_checkpointing_enable()
+            # Initialise the newly added placeholder token with the embeddings of the initializer token
+            token_embeds = text_enc.get_input_embeddings().weight.data
+            if args.initializer_token is not None:
+                if args.num_vectors > 1:
+                    for i in range(args.num_vectors):
+                        token_embeds[placeholder_token_id[i]] = token_embeds[initializer_token_id[i]]
+                else:
+                    token_embeds[placeholder_token_id] = token_embeds[initializer_token_id]
+            else:
+                if args.num_vectors > 1:
+                    for i in range(args.num_vectors):
+                        token_embeds[placeholder_token_id[i]] = torch.randn_like(token_embeds[0]) * 0.01
+                else:
+                    token_embeds[placeholder_token_id] = torch.randn_like(token_embeds[0]) * 0.01
+
+            # Freeze all parameters except for the token embeddings in text encoder
+            text_enc.text_model.encoder.requires_grad_(False)
+            text_enc.text_model.final_layer_norm.requires_grad_(False)
+            text_enc.text_model.embeddings.position_embedding.requires_grad_(False)
+            text_enc.get_input_embeddings().weight.requires_grad_(True)
+
+            if args.gradient_checkpointing:
+                # Keep unet in train mode if we are using gradient checkpointing to save memory.
+                # The dropout cannot be != 0 so it doesn't matter if we are in eval or train mode.
+                text_enc.gradient_checkpointing_enable()
 
 
     # Enable TF32 for faster training on Ampere GPUs,
@@ -148,7 +148,7 @@ def main(args):
 
     # Initialize the optimizer
     optimizer = torch.optim.AdamW(
-        text_encoder.get_input_embeddings().parameters(),
+        [text_encoder.get_input_embeddings().parameters(), text_encoder2.get_input_embeddings().parameters()],
         lr=args.clip_train_lr,
         betas=(args.adam_beta1, args.adam_beta2),
         weight_decay=args.adam_weight_decay,
@@ -164,7 +164,8 @@ def main(args):
         repeats=args.repeats,
         learnable_property=args.learnable_property,
         center_crop=args.center_crop,
-        vision_model_path=args.vision_model_pretrained,
+        vision_model1_path=args.clip_model_path,
+        vision_model2_path=args.clip_model2_path,
         initializer_token=args.initializer_token,
         pad_tokens=args.pad_tokens,
         subtokens=subtokens,
@@ -202,12 +203,15 @@ def main(args):
     clip_global_step = 0
 
     # keep original embeddings as reference
-    orig_embeds_params = accelerator.unwrap_model(text_encoder).get_input_embeddings().weight.data.clone()
+    orig_embeds_params1 = accelerator.unwrap_model(text_encoder).get_input_embeddings().weight.data.clone()
+    orig_embeds_params2 = accelerator.unwrap_model(text_encoder2).get_input_embeddings().weight.data.clone()
+
     # assume 49407 max
     index_no_updates = torch.arange(len(tokenizer)) <= 49407
 
     if args.clip_phase_gradient_checkpointing:
         text_encoder.gradient_checkpointing_enable()
+        text_encoder2.gradient_checkpointing_enable()
 
     pbar = tqdm(range(args.clip_max_train_steps))
     pbar.set_description("Steps")
@@ -218,8 +222,10 @@ def main(args):
 
             # Get the text embedding for conditioning
             cond_tok_ids = batch["input_ids"].to(accelerator.device)
-            im_embed = batch["clip_embeds"].to(accelerator.device).to(dtype=torch.float32).detach()
+            im_embed = batch["clip_embeds1"].to(accelerator.device).to(dtype=torch.float32).detach()
+            im_embed2 = batch["clip_embeds2"].to(accelerator.device).to(dtype=torch.float32).detach()
             text_embeds = text_encoder(cond_tok_ids).last_hidden_state.to(dtype=torch.float32)
+            text_embeds2 = text_encoder2(cond_tok_ids).last_hidden_state.to(dtype=torch.float32)
 
             # create a mask for indexing the EOF token, as Okaris noted, adding new tokens to vocab throws this process off
             # zero out all non-eof tokens
@@ -227,9 +233,12 @@ def main(args):
             # this is how we'll index the pooler output
             text_embeds = text_embeds[torch.arange(text_embeds.shape[0]), mask.argmax(dim=-1)]
             text_embeds = text_encoder.text_projection(text_embeds)
+            text_embeds2 = text_embeds2[torch.arange(text_embeds2.shape[0]), mask.argmax(dim=-1)]
+            text_embeds2 = text_encoder2.text_projection(text_embeds2)
 
             if args.spherical_clip_loss == True:
                 loss = spherical_dist_loss(text_embeds, im_embed)
+                loss = loss + spherical_dist_loss(text_embeds2, im_embed2)
             else:
                 text_embeds = text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True)
                 im_embed = im_embed / im_embed.norm(p=2, dim=-1, keepdim=True)
@@ -240,10 +249,20 @@ def main(args):
                     sim = sim * mask
                 loss = sim.mean()
 
+                text_embeds2 = text_embeds2 / text_embeds2.norm(p=2, dim=-1, keepdim=True)
+                im_embed2 = im_embed2 / im_embed2.norm(p=2, dim=-1, keepdim=True)
+                sim2 = -torch.matmul(text_embeds2, im_embed2.t())
+                #only similarity with correct pairings needed
+                if args.zero_out_mismatches:
+                    mask = torch.diag(torch.ones(sim2.shape[0])).float().to(sim2.device)
+                    sim2 = sim2 * mask
+                loss = loss + sim2.mean()
+
             accelerator.backward(loss)
             if accelerator.sync_gradients:
                 if args.clip_max_grad_norm is not None:
                     accelerator.clip_grad_norm_(text_encoder.get_input_embeddings().parameters(), args.clip_max_grad_norm)
+                    accelerator.clip_grad_norm_(text_encoder2.get_input_embeddings().parameters(), args.clip_max_grad_norm)
 
             optimizer.step()
             lr_scheduler.step()
@@ -256,7 +275,8 @@ def main(args):
 
             # Let's make sure we don't update any embedding weights besides the newly added token
             with torch.no_grad():
-                accelerator.unwrap_model(text_encoder).get_input_embeddings().weight[index_no_updates] = orig_embeds_params[index_no_updates]
+                accelerator.unwrap_model(text_encoder).get_input_embeddings().weight[index_no_updates] = orig_embeds_params1[index_no_updates]
+                accelerator.unwrap_model(text_encoder2).get_input_embeddings().weight[index_no_updates] = orig_embeds_params2[index_no_updates]
 
             clip_global_step += 1
             if clip_global_step >= args.clip_max_train_steps:
@@ -272,7 +292,8 @@ def main(args):
         repeats=args.repeats,
         learnable_property=args.learnable_property,
         center_crop=args.center_crop,
-        vision_model_path=None,
+        vision_model1_path=None,
+        vision_model2_path=None,
         initializer_token=args.initializer_token,
         pad_tokens=args.pad_tokens,
         vae_path=args.pretrained_model_name_or_path if args.cache_latents else None,
@@ -325,7 +346,7 @@ def main(args):
 
     # remake the optimizer
     optimizer = torch.optim.AdamW(
-        text_encoder.get_input_embeddings().parameters(),
+        [text_encoder.get_input_embeddings().parameters(), text_encoder2.get_input_embeddings().parameters()],
         lr=args.learning_rate,
         betas=(args.adam_beta1, args.adam_beta2),
         weight_decay=args.adam_weight_decay,
@@ -340,8 +361,8 @@ def main(args):
     )
 
     # Prepare everything with our `accelerator`.
-    text_encoder, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        text_encoder, optimizer, train_dataloader, lr_scheduler
+    text_encoder, text_encoder2, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        text_encoder, text_encoder2, optimizer, train_dataloader, lr_scheduler
     )
 
     if args.cache_latents == False:
@@ -390,6 +411,18 @@ def main(args):
     global_step = 0
     first_epoch = 0
 
+    def _get_add_time_ids(self, original_size, crops_coords_top_left, target_size):
+        add_time_ids = list(original_size + crops_coords_top_left + target_size)
+
+        passed_add_embed_dim = (
+                self.unet.config.addition_time_embed_dim * len(
+            add_time_ids) + self.text_encoder_2.config.projection_dim
+        )
+        expected_add_embed_dim = self.unet.add_embedding.linear_1.in_features
+
+        add_time_ids = torch.tensor([add_time_ids])
+        return add_time_ids
+
     # Only show the progress bar once on each machine.
     progress_bar = tqdm(range(global_step, args.max_train_steps), disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
@@ -405,12 +438,13 @@ def main(args):
                 continue
 
             with accelerator.accumulate(text_encoder):
-                if args.cache_latents == False:
-                    # Convert images to latent space
-                    latents = vae.encode(batch["pixel_values"].to(dtype=weight_dtype)).latent_dist.sample().detach()
-                    latents = latents * 0.18125
-                else:
-                    latents = batch["latents"].to(dtype=weight_dtype).detach()
+                with torch.no_grad():
+                    if args.cache_latents == False:
+                        # Convert images to latent space
+                        latents = vae.encode(batch["pixel_values"].to(dtype=weight_dtype)).latent_dist.sample().detach()
+                        latents = latents * 0.18125
+                    else:
+                        latents = batch["latents"].to(dtype=weight_dtype).detach()
 
                 # Sample noise that we'll add to the latents
                 noise = torch.randn_like(latents)
@@ -424,10 +458,23 @@ def main(args):
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
                 # Get the text embedding for conditioning
-                encoder_hidden_states = text_encoder(batch["input_ids"]).last_hidden_state.to(dtype=weight_dtype)
+                encoder_hidden_states1 = text_encoder(batch["input_ids"]).hidden_states[-1].to(dtype=weight_dtype)
+                output = text_encoder2(batch["input_ids"])
+                encoder_hidden_states2 = output.hidden_states[-1].to(dtype=weight_dtype)
+                pooled = output.pooler_output.to(dtype=weight_dtype)
+                encoder_hidden_states = torch.cat([encoder_hidden_states1, encoder_hidden_states2], dim=2)
+
+                original_size = (noisy_latents.shape[-2]*8, noisy_latents.shape[-1]*8)
+                target_size = (noisy_latents.shape[-2]*8, noisy_latents.shape[-1]*8)
+                crops_coords_top_left = (0, 0)
+                add_time_ids = _get_add_time_ids(unet, original_size, crops_coords_top_left, target_size).to("cuda").to(weight_dtype).repeat(noisy_latents.shape[0], 1)
+
+                added_cond_kwargs = {"text_embeds": pooled, "time_ids": add_time_ids}
 
                 # Predict the noise residual
-                model_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
+                with torch.no_grad():
+                    model_pred = unet(noisy_latents, timesteps, encoder_hidden_states=encoder_hidden_states,
+                                      added_cond_kwargs=added_cond_kwargs,).sample
 
                 # Get the target for loss depending on the prediction type
                 if noise_scheduler.config.prediction_type == "epsilon":
@@ -455,7 +502,10 @@ def main(args):
                 with torch.no_grad():
                     accelerator.unwrap_model(text_encoder).get_input_embeddings().weight[
                         index_no_updates
-                    ] = orig_embeds_params[index_no_updates]
+                    ] = orig_embeds_params1[index_no_updates]
+                    accelerator.unwrap_model(text_encoder2).get_input_embeddings().weight[
+                        index_no_updates
+                    ] = orig_embeds_params2[index_no_updates]
 
 
             # Checks if the accelerator has performed an optimization step behind the scenes
@@ -525,8 +575,10 @@ def main(args):
     # save
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
-        save_path = os.path.join(args.output_dir, "learned_embeds.bin")
+        save_path = os.path.join(args.output_dir, "learned_embeds_vitl.bin")
         save_progress(text_encoder, placeholder_token_id, accelerator, args, save_path, subtokens, logger)
+        save_path = os.path.join(args.output_dir, "learned_embeds_vitg.bin")
+        save_progress(text_encoder2, placeholder_token_id, accelerator, args, save_path, subtokens, logger)
 
     accelerator.end_training()
 

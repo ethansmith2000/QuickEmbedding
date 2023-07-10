@@ -2,7 +2,7 @@ from types import SimpleNamespace
 train_args = dict({
 "save_steps": 500,
 "clip_model_path": "openai/clip-vit-large-patch14",
-"pretrained_model_name_or_path": "Lykon/DreamShaper",
+"pretrained_model_name_or_path": "Lykon/DreamShaper", #finetuned models are less likely to have a good sense of your concept, just keep in mind
 "revision": None,
 "tokenizer_name": None,
 "train_data_dir": "./traindata",
@@ -16,8 +16,8 @@ train_args = dict({
 "center_crop": True,
 "clip_train_batch_size": 32,
 "clip_max_train_steps": 200,
-"clip_train_lr": 9.9e-02,
-"clip_phase_gradient_checkpointing": False,
+"clip_train_lr": 9.9e-02, # lower this if its overfitting
+"clip_phase_gradient_checkpointing": False, # turn on for more mem savings
 "clip_lr_scheduler": "linear",
 "spherical_clip_loss": False,
 "clip_max_grad_norm": 1.5,

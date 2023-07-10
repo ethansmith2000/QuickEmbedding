@@ -185,7 +185,8 @@ class TextualInversionDataset(Dataset):
         set="train",
         placeholder_token="*",
         center_crop=False,
-        vision_model_path=None,
+        vision_model1_path=None,
+        vision_model2_path=None,
         initializer_token="*",
         custom_prompts=False,
         pad_tokens=True,
@@ -200,7 +201,8 @@ class TextualInversionDataset(Dataset):
         self.center_crop = center_crop
         self.flip_p = flip_p
         self.initializer_token = initializer_token
-        self.vision_model_path = vision_model_path
+        self.vision_model1_path = vision_model1_path
+        self.vision_model2_path = vision_model2_path
         self.pad_tokens = pad_tokens
         #self.what_to_train = "layer"
 
@@ -250,11 +252,12 @@ class TextualInversionDataset(Dataset):
         self.flip_transform = transforms.RandomHorizontalFlip(p=self.flip_p)
 
         # get embeddings for first wave
-        if vision_model_path is not None:
-            image_model = CLIPVisionModelWithProjection.from_pretrained(vision_model_path).to("cuda").to(torch.float16).eval()
+        if vision_model1_path is not None:
+            image_model1 = CLIPVisionModelWithProjection.from_pretrained(vision_model1_path).to("cuda").to(torch.float16).eval()
+            image_model2 = CLIPVisionModelWithProjection.from_pretrained(vision_model2_path).to("cuda").to(torch.float16).eval()
 
             with torch.no_grad():
-                self.clip_embeddings = []
+                self.clip_embeddings1 = []
                 for path in self.image_paths:
                     image = Image.open(path).convert("RGB")
                     image = self.flip_transform(image)
@@ -262,10 +265,25 @@ class TextualInversionDataset(Dataset):
                     image = image[None].transpose(0, 3, 1, 2)
                     image = torch.from_numpy(image).to("cuda").to(torch.float16)
                     cuts = sliding_cutouts(image, num_cuts=4, cut_size=224)
-                    embeds = image_model(cuts).image_embeds.mean(dim=0)
-                    self.clip_embeddings.append(embeds)
+                    embeds = image_model1(cuts).image_embeds.mean(dim=0)
+                    self.clip_embeddings1.append(embeds)
 
-                self.initializer_token_id = self.tokenizer(initializer_token).input_ids[1] # ignore start and end token
+            with torch.no_grad():
+                self.clip_embeddings2 = []
+                for path in self.image_paths:
+                    image = Image.open(path).convert("RGB")
+                    image = self.flip_transform(image)
+                    image = np.array(image).astype(np.float32) / 255.0
+                    image = image[None].transpose(0, 3, 1, 2)
+                    image = torch.from_numpy(image).to("cuda").to(torch.float16)
+                    cuts = sliding_cutouts(image, num_cuts=4, cut_size=224)
+                    embeds = image_model2(cuts).image_embeds.mean(dim=0)
+                    self.clip_embeddings2.append(embeds)
+
+                #self.initializer_token_id = self.tokenizer(initializer_token).input_ids[1] # ignore start and end token
+
+            del image_model1
+            del image_model2
 
         if vae_path is not None:
             with torch.no_grad():
@@ -332,7 +350,8 @@ class TextualInversionDataset(Dataset):
             # if self.what_to_train != "layer":
             #     example["token_position"] = torch.where(example["input_ids"] == self.initializer_token_id)[0][0].item()
 
-            example["clip_embeds"] = self.clip_embeddings[i % self.num_images]
+            example["clip_embeds1"] = self.clip_embeddings1[i % self.num_images]
+            example["clip_embeds2"] = self.clip_embeddings2[i % self.num_images]
             return example
 
         else:
