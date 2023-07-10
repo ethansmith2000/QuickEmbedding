@@ -165,7 +165,7 @@ def main(args):
         learnable_property=args.learnable_property,
         center_crop=args.center_crop,
         vision_model1_path=args.clip_model_path,
-        vision_model2_path=args.clip_model2_path,
+        #vision_model2=vision_model,
         initializer_token=args.initializer_token,
         pad_tokens=args.pad_tokens,
         subtokens=subtokens,

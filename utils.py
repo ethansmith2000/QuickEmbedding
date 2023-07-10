@@ -186,7 +186,7 @@ class TextualInversionDataset(Dataset):
         placeholder_token="*",
         center_crop=False,
         vision_model1_path=None,
-        vision_model2_path=None,
+        #vision_model2=None,
         initializer_token="*",
         custom_prompts=False,
         pad_tokens=True,
@@ -202,7 +202,6 @@ class TextualInversionDataset(Dataset):
         self.flip_p = flip_p
         self.initializer_token = initializer_token
         self.vision_model1_path = vision_model1_path
-        self.vision_model2_path = vision_model2_path
         self.pad_tokens = pad_tokens
         #self.what_to_train = "layer"
 
@@ -254,7 +253,11 @@ class TextualInversionDataset(Dataset):
         # get embeddings for first wave
         if vision_model1_path is not None:
             image_model1 = CLIPVisionModelWithProjection.from_pretrained(vision_model1_path).to("cuda").to(torch.float16).eval()
-            image_model2 = CLIPVisionModelWithProjection.from_pretrained(vision_model2_path).to("cuda").to(torch.float16).eval()
+            import open_clip
+
+            model, preprocess_train, preprocess_val = open_clip.create_model_and_transforms(
+                'hf-hub:laion/CLIP-ViT-bigG-14-laion2B-39B-b160k')
+            vision_model = model.visual.to("cuda").to(torch.float16).eval()
 
             with torch.no_grad():
                 self.clip_embeddings1 = []
@@ -277,13 +280,13 @@ class TextualInversionDataset(Dataset):
                     image = image[None].transpose(0, 3, 1, 2)
                     image = torch.from_numpy(image).to("cuda").to(torch.float16)
                     cuts = sliding_cutouts(image, num_cuts=4, cut_size=224)
-                    embeds = image_model2(cuts).image_embeds.mean(dim=0)
+                    embeds = vision_model(cuts).mean(dim=0)
                     self.clip_embeddings2.append(embeds)
 
                 #self.initializer_token_id = self.tokenizer(initializer_token).input_ids[1] # ignore start and end token
 
             del image_model1
-            del image_model2
+            del vision_model
 
         if vae_path is not None:
             with torch.no_grad():
