@@ -28,19 +28,25 @@ from diffusers.optimization import get_scheduler
 from diffusers.utils.import_utils import is_xformers_available
 
 from train_config import train_args
-from utils import save_progress, spherical_dist_loss, TextualInversionDataset
+from utils import save_progress, spherical_dist_loss, TextualInversionDataset, norm_loss
+
+from accelerate.utils import ProjectConfiguration, set_seed
 
 
 logger = get_logger(__name__)
 
 def main(args):
     logging_dir = os.path.join(args.output_dir, args.logging_dir)
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
+
+    accelerator_project_config = ProjectConfiguration(project_dir=args.output_dir, logging_dir=logging_dir)
 
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
         log_with=args.report_to,
-        logging_dir=logging_dir,
+        project_config=accelerator_project_config,
     )
 
     if args.report_to == "wandb":
@@ -211,6 +217,9 @@ def main(args):
 
     pbar = tqdm(range(args.clip_max_train_steps))
     pbar.set_description("Steps")
+
+    ref_norm = None
+
     for epoch in range(clip_train_epochs):
         text_encoder.train()
         for step, batch in enumerate(train_dataloader):
@@ -221,6 +230,9 @@ def main(args):
             im_embed = batch["clip_embeds"].to(accelerator.device).to(dtype=torch.float32).detach()
             text_embeds = text_encoder(cond_tok_ids).last_hidden_state.to(dtype=torch.float32)
 
+            if ref_norm is None:
+                ref_norm = text_embeds[0, 2, :].norm()
+
             # create a mask for indexing the EOF token, as Okaris noted, adding new tokens to vocab throws this process off
             # zero out all non-eof tokens
             mask = torch.where(cond_tok_ids==49407,cond_tok_ids,0)
@@ -229,7 +241,7 @@ def main(args):
             text_embeds = text_encoder.text_projection(text_embeds)
 
             if args.spherical_clip_loss == True:
-                loss = spherical_dist_loss(text_embeds, im_embed)
+                loss = spherical_dist_loss(text_embeds, im_embed).mean()
             else:
                 text_embeds = text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True)
                 im_embed = im_embed / im_embed.norm(p=2, dim=-1, keepdim=True)
@@ -239,6 +251,10 @@ def main(args):
                     mask = torch.diag(torch.ones(sim.shape[0])).float().to(sim.device)
                     sim = sim * mask
                 loss = sim.mean()
+
+            # if args.norm_loss_factor > 0:
+            #     breakpoint()
+            #     loss += args.norm_loss_factor * norm_loss(text_encoder.get_input_embeddings().weight[-1], ref_norm=ref_norm)
 
             accelerator.backward(loss)
             if accelerator.sync_gradients:
@@ -361,18 +377,15 @@ def main(args):
         text_encoder.gradient_checkpointing_enable()
         unet.enable_gradient_checkpointing()
 
-
     # Move vae and unet to device and cast to weight_dtype
     unet.requires_grad_(False)
     unet.to(accelerator.device, dtype=weight_dtype)
-
 
     if args.enable_xformers_memory_efficient_attention:
         if is_xformers_available():
             unet.enable_xformers_memory_efficient_attention()
         else:
             raise ValueError("xformers is not available. Make sure it is installed correctly")
-
 
 
     # Load scheduler and models
@@ -438,6 +451,9 @@ def main(args):
                     raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
                 loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+
+                # if args.norm_loss_factor > 0:
+                #     loss += args.norm_loss_factor * norm_loss(text_encoder.get_input_embeddings().weight[-1], ref_norm=ref_norm)
 
                 accelerator.backward(loss)
 

@@ -124,6 +124,9 @@ def spherical_dist_loss(x, y):
     y = F.normalize(y, dim=-1)  # text embed always (1,768)
     return (x - y).norm(dim=-1).div(2).arcsin().pow(2).mul(2)
 
+def norm_loss(tensor, ref_norm):
+    return (tensor.norm() - ref_norm).pow(2)
+
 def save_progress(text_encoder, placeholder_token_id, accelerator, args, save_path, subtokens, logger):
     if isinstance(placeholder_token_id, list):
         logger.info("Saving embeddings")
@@ -263,7 +266,7 @@ class TextualInversionDataset(Dataset):
                     image = torch.from_numpy(image).to("cuda").to(torch.float16)
                     cuts = sliding_cutouts(image, num_cuts=4, cut_size=224)
                     embeds = image_model(cuts).image_embeds.mean(dim=0)
-                    self.clip_embeddings.append(embeds)
+                    self.clip_embeddings.append(embeds.cpu().numpy())
 
                 self.initializer_token_id = self.tokenizer(initializer_token).input_ids[1] # ignore start and end token
 
@@ -295,7 +298,7 @@ class TextualInversionDataset(Dataset):
                     image = torch.from_numpy(image).permute(2, 0, 1).to(torch.float16).to("cuda").unsqueeze(0)
                     latents = vae.encode(image).latent_dist.sample().squeeze(0)
                     latents = latents * 0.18125
-                    self.latents.append(latents)
+                    self.latents.append(latents.cpu())
         else:
             self.latents = None
 
